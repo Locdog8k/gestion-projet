@@ -52,6 +52,7 @@ label{display:block;font-size:12px;color:var(--mute);margin:10px 0 3px}
   <select id="fPrio"><option value="">Toutes priorités</option><option>haute</option><option>moyenne</option><option>basse</option></select>
   <select id="fTag"></select>
   <span class="spacer"></span>
+  <button id="status" style="border:none;background:none">…</button>
   <button id="members">👥 Membres</button>
   <button id="export">⬇ Export</button>
   <button id="import">⬆ Import</button>
@@ -88,9 +89,65 @@ label{display:block;font-size:12px;color:var(--mute);margin:10px 0 3px}
 const KEY='suivi-projet-v1';
 const uid=()=>Math.random().toString(36).slice(2,10);
 const def=()=>({members:['Moi','Ami'],columns:[
-  {id:uid(),name:'💡 Idées'},{id:uid(),name:'📋 À faire'},{id:uid(),name:'🔨 En cours'},{id:uid(),name:'🧪 À tester'},{id:uid(),name:'✅ Terminé'}],tasks:[]});
+  {id:uid(),name:'💡 Idées'},{id:uid(),name:'📋 À faire'},{id:uid(),name:'🔨 En cours'},{id:uid(),name:'🧪 À tester'},{id:uid(),name:'✅ Terminé'}],tasks:[],deleted:{},mu:0,cu:0});
 let S;try{S=JSON.parse(localStorage.getItem(KEY))||def()}catch{S=def()}
-const save=()=>{localStorage.setItem(KEY,JSON.stringify(S));render()};
+S.deleted=S.deleted||{};S.mu=S.mu||0;S.cu=S.cu||0;
+const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch{}};
+const save=()=>{persist();render();schedulePush()};
+
+/* ---------- Synchro collaborative ---------- */
+// Fusion identique à api/state.js. En cas d'égalité, `a` gagne.
+function merge(a,b){
+  const r={};
+  const pm=(b.mu||0)>(a.mu||0)?b:a;r.members=pm.members;r.mu=pm.mu||0;
+  const pc=(b.cu||0)>(a.cu||0)?b:a;r.columns=pc.columns;r.cu=pc.cu||0;
+  r.deleted={...a.deleted};for(const k in b.deleted)r.deleted[k]=Math.max(r.deleted[k]||0,b.deleted[k]);
+  const m={};for(const t of [...a.tasks,...b.tasks])if(!m[t.id]||(t.u||0)>(m[t.id].u||0))m[t.id]=t;
+  const ids=new Set(r.columns.map(c=>c.id));
+  r.tasks=Object.values(m).filter(t=>!(r.deleted[t.id]>=(t.u||0))).map(t=>ids.has(t.col)?t:{...t,col:r.columns[0]?.id});
+  return r;
+}
+let snap={};
+const sig=t=>JSON.stringify({...t,u:0});
+function takeSnap(){snap={};S.tasks.forEach(t=>snap[t.id]=sig(t));snap._m=JSON.stringify(S.members);snap._c=JSON.stringify(S.columns)}
+// Date les modifications locales depuis la dernière synchro (pour la fusion par tâche).
+function stamp(){
+  const now=Date.now(),cur=new Set();
+  S.tasks.forEach(t=>{cur.add(t.id);if(snap[t.id]!==sig(t))t.u=now});
+  for(const id in snap)if(id[0]!=='_'&&!cur.has(id))S.deleted[id]=now;
+  if(snap._m!==JSON.stringify(S.members))S.mu=now;
+  if(snap._c!==JSON.stringify(S.columns))S.cu=now;
+  takeSnap();
+}
+let pw=localStorage.getItem('suivi-pw')||'',pushT=null,busy=false,again=false;
+function status(txt,cls){const e=$('status');e.textContent=txt;e.style.color=cls}
+async function api(body){
+  const r=await fetch('/api/state',{method:'POST',headers:{'content-type':'application/json','x-password':pw},body:JSON.stringify(body)});
+  if(r.status===401)throw 'auth';
+  if(!r.ok)throw 'http';
+  return r.json();
+}
+function schedulePush(){clearTimeout(pushT);pushT=setTimeout(sync,300)}
+async function sync(){
+  if(busy){again=true;return}
+  busy=true;
+  try{
+    if(!pw)throw 'auth';
+    stamp();
+    const resp=await api(S);
+    stamp(); // modifications faites pendant l'aller-retour
+    const before=JSON.stringify(S);
+    S=merge(resp,S);takeSnap();persist();
+    if(JSON.stringify(S)!==before&&!dragId&&!document.activeElement?.isContentEditable&&!$('dlg').open)render();
+    status('🟢 Synchronisé','var(--green)');
+  }catch(e){
+    if(e==='auth')status('🔒 Mot de passe','var(--orange)');
+    else status('🔴 Hors ligne (local)','var(--red)');
+  }
+  busy=false;
+  if(again){again=false;schedulePush()}
+}
+function askPw(){const v=prompt('Mot de passe du projet :',pw);if(v!==null){pw=v;localStorage.setItem('suivi-pw',pw);sync()}}
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let editing=null,dragId=null;
@@ -177,9 +234,13 @@ $('form').onsubmit=()=>{
 $('members').onclick=()=>{const v=prompt('Membres (séparés par des virgules) :',S.members.join(', '));if(v!==null){S.members=v.split(',').map(s=>s.trim()).filter(Boolean);save()}};
 $('export').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}));a.download='suivi-projet-'+new Date().toISOString().slice(0,10)+'.json';a.click()};
 $('import').onclick=()=>$('file').click();
-$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.columns||!d.tasks)throw 0;if(confirm('Remplacer les données actuelles par ce fichier ?')){S=d;save()}}catch{alert('Fichier invalide')}e.target.value=''};
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.columns||!d.tasks)throw 0;if(confirm('Remplacer les données actuelles par ce fichier ?')){S=d;S.deleted=S.deleted||{};S.mu=S.mu||0;S.cu=S.cu||0;save()}}catch{alert('Fichier invalide')}e.target.value=''};
 ['search','fAssignee','fPrio','fTag'].forEach(i=>$(i).oninput=render);
-render();
+$('status').onclick=()=>{if($('status').textContent.includes('Mot de passe')||!pw)askPw();else sync()};
+takeSnap();render();
+if(!pw)setTimeout(askPw,200);else sync();
+setInterval(()=>{if(!document.hidden)sync()},5000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});
 </script>
 </body>
 </html>
