@@ -53,6 +53,7 @@ label{display:block;font-size:12px;color:var(--mute);margin:10px 0 3px}
   <select id="fTag"></select>
   <span class="spacer"></span>
   <button id="status" style="border:none;background:none">…</button>
+  <button id="resetCols">↺ Silos par défaut</button>
   <button id="members">👥 Membres</button>
   <button id="export">⬇ Export</button>
   <button id="import">⬆ Import</button>
@@ -88,8 +89,16 @@ label{display:block;font-size:12px;color:var(--mute);margin:10px 0 3px}
 <script>
 const KEY='suivi-projet-v1';
 const uid=()=>Math.random().toString(36).slice(2,10);
-const def=()=>({members:['Moi','Ami'],columns:[
-  {id:uid(),name:'💡 Idées'},{id:uid(),name:'📋 À faire'},{id:uid(),name:'🔨 En cours'},{id:uid(),name:'🧪 À tester'},{id:uid(),name:'✅ Terminé'}],tasks:[],deleted:{},mu:0,cu:0});
+// Identifiants fixes : tout le monde partage les mêmes silos par défaut.
+const DEFCOLS=[{id:'idees',name:'💡 Idées'},{id:'a-faire',name:'📋 À faire'},{id:'en-cours',name:'🔨 En cours'},{id:'a-tester',name:'🧪 À tester'},{id:'termine',name:'✅ Terminé'}];
+const def=()=>({members:['Moi','Ami'],columns:DEFCOLS.map(c=>({...c})),tasks:[],deleted:{},mu:0,cu:0});
+function resetCols(){
+  if(!confirm('Remettre les silos par défaut ?\nLes tâches ne sont pas supprimées : celles qui étaient dans un silo personnalisé iront dans « À faire ».'))return;
+  const ids=new Set(DEFCOLS.map(c=>c.id));
+  S.columns=DEFCOLS.map(c=>({...c}));
+  S.tasks.forEach(t=>{if(!ids.has(t.col))t.col='a-faire'});
+  save();
+}
 let S;try{S=JSON.parse(localStorage.getItem(KEY))||def()}catch{S=def()}
 S.deleted=S.deleted||{};S.mu=S.mu||0;S.cu=S.cu||0;
 const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch{}};
@@ -175,9 +184,10 @@ function render(){
     const tasks=S.tasks.filter(t=>t.col===c.id&&visible(t)).sort((a,b)=>order[a.prio]-order[b.prio]||(a.due||'9').localeCompare(b.due||'9'));
     const el=document.createElement('div');el.className='col';
     el.innerHTML=`<div class="col-head"><span class="name" contenteditable spellcheck="false">${esc(c.name)}</span><span class="count">${tasks.length}</span>
-      <button title="Gauche">◀</button><button title="Droite">▶</button><button title="Supprimer le silo">🗑</button></div>
+      <button title="Renommer">✏</button><button title="Gauche">◀</button><button title="Droite">▶</button><button title="Supprimer le silo">🗑</button></div>
       <div class="cards"></div><button class="add">+ Tâche</button>`;
-    const [bl,br,bd]=el.querySelectorAll('.col-head button');
+    const [be,bl,br,bd]=el.querySelectorAll('.col-head button');
+    be.onclick=()=>{const n=prompt('Nouveau nom du silo :',c.name);if(n&&n.trim()){c.name=n.trim();save()}};
     el.querySelector('.name').onblur=e=>{c.name=e.target.textContent.trim()||c.name;save()};
     el.querySelector('.name').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();e.target.blur()}};
     const move=d=>{const i=S.columns.indexOf(c),j=i+d;if(j<0||j>=S.columns.length)return;S.columns.splice(i,1);S.columns.splice(j,0,c);save()};
@@ -236,6 +246,7 @@ $('export').onclick=()=>{const a=document.createElement('a');a.href=URL.createOb
 $('import').onclick=()=>$('file').click();
 $('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.columns||!d.tasks)throw 0;if(confirm('Remplacer les données actuelles par ce fichier ?')){S=d;S.deleted=S.deleted||{};S.mu=S.mu||0;S.cu=S.cu||0;save()}}catch{alert('Fichier invalide')}e.target.value=''};
 ['search','fAssignee','fPrio','fTag'].forEach(i=>$(i).oninput=render);
+$('resetCols').onclick=resetCols;
 $('status').onclick=()=>{if($('status').textContent.includes('Mot de passe')||!pw)askPw();else sync()};
 takeSnap();render();
 if(!pw)setTimeout(askPw,200);else sync();
