@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Suivi de projet</title>
+<style>
+:root{--bg:#0f1115;--panel:#181b22;--card:#20242d;--line:#2d3340;--text:#e8eaf0;--mute:#8b93a7;--accent:#5b8cff;--red:#ff5b6b;--orange:#ffa94d;--green:#4cd694}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:16px;margin:0 12px 0 0}
+input,select,textarea,button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+textarea{width:100%;resize:vertical}
+button{cursor:pointer}button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--red)}
+.spacer{flex:1}
+#board{flex:1;display:flex;gap:12px;padding:16px;overflow-x:auto;align-items:flex-start}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:290px;min-width:290px;max-height:100%;display:flex;flex-direction:column}
+.col.over{border-color:var(--accent)}
+.col-head{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.col-head .name{font-weight:600;flex:1;outline:none;border-radius:4px;padding:0 2px}
+.col-head .count{color:var(--mute);font-size:12px}
+.col-head button{padding:2px 7px;border:none;background:none;color:var(--mute)}
+.cards{padding:10px;display:flex;flex-direction:column;gap:8px;overflow-y:auto;min-height:40px}
+.card{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--mute);border-radius:8px;padding:9px 10px;cursor:grab}
+.card.dragging{opacity:.4}
+.card.p-haute{border-left-color:var(--red)}.card.p-moyenne{border-left-color:var(--orange)}.card.p-basse{border-left-color:var(--green)}
+.card .t{font-weight:600;word-break:break-word}
+.meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;font-size:11px;color:var(--mute)}
+.chip{background:#2a3040;border-radius:10px;padding:1px 8px}
+.chip.late{background:#4a2227;color:var(--red)}
+.add{margin:0 10px 10px;border-style:dashed;color:var(--mute)}
+.newcol{min-width:200px;width:200px;background:none;border-style:dashed;color:var(--mute);padding:12px}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;width:min(560px,94vw);padding:18px}
+dialog::backdrop{background:#000a}
+label{display:block;font-size:12px;color:var(--mute);margin:10px 0 3px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.row input,.row select{width:100%}
+.notes{max-height:180px;overflow-y:auto;margin-top:6px}
+.note{background:var(--card);border-radius:6px;padding:6px 8px;margin-bottom:6px}
+.note small{color:var(--mute);display:block}
+.actions{display:flex;gap:8px;margin-top:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎮 Suivi de projet</h1>
+  <input id="search" placeholder="Rechercher…" style="width:180px">
+  <select id="fAssignee"></select>
+  <select id="fPrio"><option value="">Toutes priorités</option><option>haute</option><option>moyenne</option><option>basse</option></select>
+  <select id="fTag"></select>
+  <span class="spacer"></span>
+  <button id="members">👥 Membres</button>
+  <button id="export">⬇ Export</button>
+  <button id="import">⬆ Import</button>
+  <input type="file" id="file" accept=".json" hidden>
+</header>
+<div id="board"></div>
+
+<dialog id="dlg">
+  <form method="dialog" id="form">
+    <label>Titre</label><input id="f-title" style="width:100%" required>
+    <label>Description</label><textarea id="f-desc" rows="3"></textarea>
+    <div class="row">
+      <div><label>Silo</label><select id="f-col"></select></div>
+      <div><label>Assigné à</label><select id="f-assignee"></select></div>
+    </div>
+    <div class="row">
+      <div><label>Priorité</label><select id="f-prio"><option>haute</option><option selected>moyenne</option><option>basse</option></select></div>
+      <div><label>Catégorie</label><input id="f-tag" list="tags" placeholder="Script, UI, Map…"><datalist id="tags"></datalist></div>
+      <div><label>Échéance</label><input id="f-due" type="date"></div>
+    </div>
+    <label>Notes / modifications</label>
+    <div class="notes" id="notes"></div>
+    <div class="row" style="margin-top:6px"><input id="f-note" placeholder="Ajouter une note (ex: changé X en Y)…"><button type="button" id="addNote" style="flex:0">Ajouter</button></div>
+    <div class="actions">
+      <button type="button" class="danger" id="del">Supprimer</button>
+      <span class="spacer"></span>
+      <button type="button" id="cancel">Fermer</button>
+      <button class="primary" id="save" value="ok">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const KEY='suivi-projet-v1';
+const uid=()=>Math.random().toString(36).slice(2,10);
+const def=()=>({members:['Moi','Ami'],columns:[
+  {id:uid(),name:'💡 Idées'},{id:uid(),name:'📋 À faire'},{id:uid(),name:'🔨 En cours'},{id:uid(),name:'🧪 À tester'},{id:uid(),name:'✅ Terminé'}],tasks:[]});
+let S;try{S=JSON.parse(localStorage.getItem(KEY))||def()}catch{S=def()}
+const save=()=>{localStorage.setItem(KEY,JSON.stringify(S));render()};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let editing=null,dragId=null;
+
+function fillFilters(){
+  const keep=[$('fAssignee').value,$('fTag').value];
+  $('fAssignee').innerHTML='<option value="">Tous les membres</option>'+S.members.map(m=>`<option>${esc(m)}</option>`).join('');
+  const tags=[...new Set(S.tasks.map(t=>t.tag).filter(Boolean))];
+  $('fTag').innerHTML='<option value="">Toutes catégories</option>'+tags.map(t=>`<option>${esc(t)}</option>`).join('');
+  $('tags').innerHTML=tags.map(t=>`<option value="${esc(t)}">`).join('');
+  $('fAssignee').value=keep[0];$('fTag').value=keep[1];
+}
+function visible(t){
+  const q=$('search').value.toLowerCase();
+  return (!q||(t.title+' '+t.desc+' '+t.tag).toLowerCase().includes(q))
+   &&(!$('fAssignee').value||t.assignee===$('fAssignee').value)
+   &&(!$('fPrio').value||t.prio===$('fPrio').value)
+   &&(!$('fTag').value||t.tag===$('fTag').value);
+}
+function render(){
+  fillFilters();
+  const b=$('board');b.innerHTML='';
+  const order={haute:0,moyenne:1,basse:2};
+  S.columns.forEach(c=>{
+    const tasks=S.tasks.filter(t=>t.col===c.id&&visible(t)).sort((a,b)=>order[a.prio]-order[b.prio]||(a.due||'9').localeCompare(b.due||'9'));
+    const el=document.createElement('div');el.className='col';
+    el.innerHTML=`<div class="col-head"><span class="name" contenteditable spellcheck="false">${esc(c.name)}</span><span class="count">${tasks.length}</span>
+      <button title="Gauche">◀</button><button title="Droite">▶</button><button title="Supprimer le silo">🗑</button></div>
+      <div class="cards"></div><button class="add">+ Tâche</button>`;
+    const [bl,br,bd]=el.querySelectorAll('.col-head button');
+    el.querySelector('.name').onblur=e=>{c.name=e.target.textContent.trim()||c.name;save()};
+    el.querySelector('.name').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();e.target.blur()}};
+    const move=d=>{const i=S.columns.indexOf(c),j=i+d;if(j<0||j>=S.columns.length)return;S.columns.splice(i,1);S.columns.splice(j,0,c);save()};
+    bl.onclick=()=>move(-1);br.onclick=()=>move(1);
+    bd.onclick=()=>{const n=S.tasks.filter(t=>t.col===c.id).length;
+      if(S.columns.length<2)return alert('Il faut au moins un silo.');
+      if(confirm(`Supprimer "${c.name}"${n?` et ses ${n} tâche(s)`:''} ?`)){S.tasks=S.tasks.filter(t=>t.col!==c.id);S.columns=S.columns.filter(x=>x!==c);save()}};
+    el.querySelector('.add').onclick=()=>openTask(null,c.id);
+    const list=el.querySelector('.cards');
+    tasks.forEach(t=>{
+      const late=t.due&&t.col!==S.columns[S.columns.length-1].id&&t.due<new Date().toISOString().slice(0,10);
+      const k=document.createElement('div');k.className='card p-'+t.prio;k.draggable=true;
+      k.innerHTML=`<div class="t">${esc(t.title)}</div><div class="meta">
+        ${t.tag?`<span class="chip">${esc(t.tag)}</span>`:''}${t.assignee?`<span class="chip">👤 ${esc(t.assignee)}</span>`:''}
+        ${t.due?`<span class="chip ${late?'late':''}">📅 ${esc(t.due)}</span>`:''}${t.notes?.length?`<span class="chip">💬 ${t.notes.length}</span>`:''}</div>`;
+      k.onclick=()=>openTask(t);
+      k.ondragstart=()=>{dragId=t.id;k.classList.add('dragging')};
+      k.ondragend=()=>k.classList.remove('dragging');
+      list.appendChild(k);
+    });
+    el.ondragover=e=>{e.preventDefault();el.classList.add('over')};
+    el.ondragleave=()=>el.classList.remove('over');
+    el.ondrop=e=>{e.preventDefault();const t=S.tasks.find(x=>x.id===dragId);if(t&&t.col!==c.id){t.col=c.id;(t.notes=t.notes||[]).push({d:new Date().toISOString(),text:`Déplacé vers « ${c.name} »`});}dragId=null;save()};
+    b.appendChild(el);
+  });
+  const nc=document.createElement('button');nc.className='newcol col';nc.textContent='+ Nouveau silo';
+  nc.onclick=()=>{const n=prompt('Nom du silo ?');if(n){S.columns.push({id:uid(),name:n});save()}};
+  b.appendChild(nc);
+}
+function renderNotes(){
+  $('notes').innerHTML=(editing?.notes||[]).slice().reverse().map(n=>`<div class="note"><small>${new Date(n.d).toLocaleString('fr-FR')}</small>${esc(n.text)}</div>`).join('')||'<small style="color:var(--mute)">Aucune note</small>';
+}
+function openTask(t,col){
+  editing=t||{id:uid(),title:'',desc:'',col,assignee:'',prio:'moyenne',tag:'',due:'',notes:[],isNew:true};
+  $('f-title').value=editing.title;$('f-desc').value=editing.desc;
+  $('f-col').innerHTML=S.columns.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');$('f-col').value=editing.col;
+  $('f-assignee').innerHTML='<option value="">—</option>'+S.members.map(m=>`<option>${esc(m)}</option>`).join('');$('f-assignee').value=editing.assignee;
+  $('f-prio').value=editing.prio;$('f-tag').value=editing.tag;$('f-due').value=editing.due;$('f-note').value='';
+  $('del').style.display=editing.isNew?'none':'';
+  renderNotes();$('dlg').showModal();
+}
+$('addNote').onclick=()=>{const v=$('f-note').value.trim();if(!v)return;(editing.notes=editing.notes||[]).push({d:new Date().toISOString(),text:v});$('f-note').value='';renderNotes()};
+$('cancel').onclick=()=>$('dlg').close();
+$('del').onclick=()=>{if(confirm('Supprimer cette tâche ?')){S.tasks=S.tasks.filter(x=>x.id!==editing.id);$('dlg').close();save()}};
+$('form').onsubmit=()=>{
+  const old=S.tasks.find(x=>x.id===editing.id);
+  const colName=id=>S.columns.find(c=>c.id===id)?.name;
+  if(old&&old.col!==$('f-col').value)editing.notes.push({d:new Date().toISOString(),text:`Déplacé vers « ${colName($('f-col').value)} »`});
+  Object.assign(editing,{title:$('f-title').value.trim(),desc:$('f-desc').value,col:$('f-col').value,assignee:$('f-assignee').value,prio:$('f-prio').value,tag:$('f-tag').value.trim(),due:$('f-due').value});
+  delete editing.isNew;
+  if(!old)S.tasks.push(editing);
+  save();
+};
+$('members').onclick=()=>{const v=prompt('Membres (séparés par des virgules) :',S.members.join(', '));if(v!==null){S.members=v.split(',').map(s=>s.trim()).filter(Boolean);save()}};
+$('export').onclick=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,2)],{type:'application/json'}));a.download='suivi-projet-'+new Date().toISOString().slice(0,10)+'.json';a.click()};
+$('import').onclick=()=>$('file').click();
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.columns||!d.tasks)throw 0;if(confirm('Remplacer les données actuelles par ce fichier ?')){S=d;save()}}catch{alert('Fichier invalide')}e.target.value=''};
+['search','fAssignee','fPrio','fTag'].forEach(i=>$(i).oninput=render);
+render();
+</script>
+</body>
+</html>
